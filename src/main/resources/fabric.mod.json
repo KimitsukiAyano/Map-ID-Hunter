@@ -15,6 +15,9 @@
 	"entrypoints": {
 		"client": [
 			"io.github.kimitsukiayano.roundmaphunter.RoundMapHunterClient"
+		],
+		"modmenu": [
+			"io.github.kimitsukiayano.roundmaphunter.config.ModMenuIntegration"
 		]
 	},
 	"mixins": [
