@@ -1,0 +1,36 @@
+{
+	"schemaVersion": 1,
+	"id": "roundmaphunter",
+	"version": "${version}",
+	"name": "Round-Numbered Map ID Hunter",
+	"description": "製図台での地図ロックを半自動化し、キリ番マップID（#777 など）の取得を補助するクライアント Mod。",
+	"authors": [
+		"KimitsukiAyano"
+	],
+	"contact": {
+		"repo": "https://github.com/KimitsukiAyano/Round-Numbered-id-Map-Hunter"
+	},
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"client": [
+			"io.github.kimitsukiayano.roundmaphunter.RoundMapHunterClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "roundmaphunter.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.0",
+		"minecraft": "~1.21.11",
+		"java": ">=21",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"modmenu": "*",
+		"yet_another_config_lib_v3": "*"
+	}
+}
