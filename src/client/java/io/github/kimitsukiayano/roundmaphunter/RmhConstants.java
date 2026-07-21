@@ -22,4 +22,8 @@ public final class RmhConstants {
 	public static final int MIN_LOCK_DELAY_TICKS = 5;       // safety floor (~0.25s @ 20 tps)
 	public static final int DEFAULT_LOCK_DELAY_TICKS = 10;  // conservative default (~0.5s)
 	public static final int MAX_LOCK_DELAY_TICKS = 100;     // slider upper bound (~5s)
+
+	// ---- Internal pacing ----
+	public static final int INTER_ACTION_TICKS = 2;         // gap between clicks within one cycle
+	public static final int SERVER_WAIT_TIMEOUT_TICKS = 60; // give up waiting on the server after ~3s
 }

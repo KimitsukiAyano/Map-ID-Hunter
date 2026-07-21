@@ -2,6 +2,7 @@ package io.github.kimitsukiayano.roundmaphunter.mixin.client;
 
 import io.github.kimitsukiayano.roundmaphunter.RmhConstants;
 import io.github.kimitsukiayano.roundmaphunter.RoundMapHunterClient;
+import io.github.kimitsukiayano.roundmaphunter.autolock.AutoLockController;
 import io.github.kimitsukiayano.roundmaphunter.config.RoundMapHunterConfig;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ingame.CartographyTableScreen;
@@ -58,11 +59,16 @@ public abstract class CartographyTableScreenMixin extends HandledScreen<Cartogra
 			int bx = this.x + RmhConstants.BUTTON_OFFSET_X;
 			int by = this.y + RmhConstants.BUTTON_OFFSET_Y;
 			roundmaphunter$button = ButtonWidget
-					.builder(Text.literal(RmhConstants.BUTTON_LABEL_IDLE), b -> roundmaphunter$onButtonPressed())
+					.builder(Text.literal(RmhConstants.BUTTON_LABEL_IDLE),
+							b -> AutoLockController.INSTANCE.toggle((CartographyTableScreen) (Object) this))
 					.dimensions(bx, by, RmhConstants.BUTTON_WIDTH, RmhConstants.BUTTON_HEIGHT)
 					.build();
 			this.addDrawableChild(roundmaphunter$button);
 		}
+
+		// Live label so the button shows running vs idle.
+		roundmaphunter$button.setMessage(Text.literal(
+				AutoLockController.INSTANCE.isRunning() ? RmhConstants.BUTTON_LABEL_RUNNING : RmhConstants.BUTTON_LABEL_IDLE));
 
 		// One-time diagnostic: prove the slot indices are resolved from the handler, not hardcoded.
 		if (!roundmaphunter$loggedSlots) {
@@ -74,17 +80,5 @@ public abstract class CartographyTableScreenMixin extends HandledScreen<Cartogra
 					CartographyTableScreenHandler.RESULT_SLOT_INDEX,
 					this.getScreenHandler().slots.size());
 		}
-	}
-
-	@Unique
-	private void roundmaphunter$onButtonPressed() {
-		// Step 2: no locking yet — just confirm the wiring end to end.
-		RoundMapHunterClient.sendChat(Text.literal("[RoundMapHunter] button pressed (auto-lock not wired yet)"));
-		CartographyTableScreenHandler handler = this.getScreenHandler();
-		RoundMapHunterClient.LOGGER.info(
-				"[cartography] pressed. map-slot stack={}, material-slot stack={}, result-slot stack={}",
-				handler.getSlot(CartographyTableScreenHandler.MAP_SLOT_INDEX).getStack(),
-				handler.getSlot(CartographyTableScreenHandler.MATERIAL_SLOT_INDEX).getStack(),
-				handler.getSlot(CartographyTableScreenHandler.RESULT_SLOT_INDEX).getStack());
 	}
 }

@@ -1,7 +1,9 @@
 package io.github.kimitsukiayano.roundmaphunter;
 
+import io.github.kimitsukiayano.roundmaphunter.autolock.AutoLockController;
 import io.github.kimitsukiayano.roundmaphunter.config.RoundMapHunterConfig;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.text.Text;
 import org.slf4j.Logger;
@@ -21,6 +23,7 @@ public class RoundMapHunterClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		RoundMapHunterConfig.load();
+		ClientTickEvents.END_CLIENT_TICK.register(AutoLockController.INSTANCE::tick);
 		LOGGER.info("[{}] client initialized (enabled={})", MOD_ID, RoundMapHunterConfig.get().enabled);
 	}
 
