@@ -1,12 +1,18 @@
 package io.github.kimitsukiayano.roundmaphunter;
 
+import io.github.kimitsukiayano.roundmaphunter.config.RoundMapHunterConfig;
 import net.fabricmc.api.ClientModInitializer;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.text.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Client entrypoint. Step 1: an empty, buildable skeleton that only logs on init.
- * Real behaviour (cartography-table button, auto-lock loop, config) is added in later steps.
+ * Client entrypoint.
+ *
+ * <p>Step 2: loads config and wires the cartography-table button (see
+ * {@code mixin.client.CartographyTableScreenMixin}). The button currently only prints
+ * to chat and logs the slot indices it resolved from the screen handler.
  */
 public class RoundMapHunterClient implements ClientModInitializer {
 	public static final String MOD_ID = "roundmaphunter";
@@ -14,6 +20,15 @@ public class RoundMapHunterClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
-		LOGGER.info("[{}] client initialized (skeleton)", MOD_ID);
+		RoundMapHunterConfig.load();
+		LOGGER.info("[{}] client initialized (enabled={})", MOD_ID, RoundMapHunterConfig.get().enabled);
+	}
+
+	/** Append a client-local chat line. Never sent to the server. */
+	public static void sendChat(Text text) {
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client.inGameHud != null) {
+			client.inGameHud.getChatHud().addMessage(text);
+		}
 	}
 }
