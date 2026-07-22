@@ -24,24 +24,23 @@ import java.util.HashSet;
 import java.util.Set;
 
 /**
- * Drives the semi-automatic cartography lock. Everything happens through
- * {@link ClientPlayerInteractionManager#clickSlot} with a plain left-click ({@code PICKUP}),
- * i.e. the exact call the vanilla client makes when a human left-clicks a slot — so the
- * outbound packets are byte-for-byte identical to manual play. No custom packets are ever built.
- *
- * <p>Fairness rules enforced here:
+ * Drives the semi-automatic cartography lock. Every item move is a single
+ * {@code clickSlot(syncId, slotId, 0, SlotActionType.QUICK_MOVE, player)} — the exact call the
+ * vanilla client makes when a human shift-clicks a slot. The cartography handler's own
+ * {@code quickMove} routing then places the item (verified against 1.21.11):
  * <ul>
- *   <li>Never acts while the player's cursor holds an item; if an operation leaves an item on the
- *       cursor it is restored to the inventory.</li>
- *   <li>One click per action tick with a small gap, plus the configurable {@code lockDelayTicks}
- *       between whole lock cycles — no packet spam.</li>
+ *   <li>a filled map (has {@code MAP_ID}) shift-clicked from the inventory → the map slot (0) only;</li>
+ *   <li>a glass pane → the material slot (1) only;</li>
+ *   <li>the result slot (2) → back into the player inventory.</li>
  * </ul>
+ * So outbound packets are byte-for-byte identical to manual play, no custom packets are built, and
+ * because shift-click never uses the cursor we never disturb an item the player is holding.
  *
- * <p>Overshoot handling (predict-from-observed): the result preview only carries the <em>source</em>
- * map's id, and the client cannot read the world map-id counter, so the final locked id is known
- * only after a result is taken. Locked ids are consecutive, so once one is observed the next is
- * {@code lastId + 1}; we stop exactly at the target and abort if a taken id ever passes it. The only
- * unpreventable overshoot is the very first lock (see chat log emitted at start).
+ * <p>Overshoot handling (predict-from-observed): the preview only carries the <em>source</em> map's
+ * id and the client cannot read the world map-id counter, so the final locked id is known only after
+ * a result is taken. Locked ids are consecutive, so after the first observed lock the next is
+ * {@code lastId + 1}; we stop exactly at the target and abort if a taken id ever passes it. Only the
+ * very first lock cannot be predicted.
  */
 public final class AutoLockController {
 	public static final AutoLockController INSTANCE = new AutoLockController();
@@ -51,31 +50,29 @@ public final class AutoLockController {
 
 	private enum State {
 		CHECK_CURSOR,
-		INSERT_MAP_PICKUP,
-		INSERT_MAP_PLACE,
+		INSERT_MAP,
+		VERIFY_MAP,
 		GLASS_CHECK,
-		GLASS_PICKUP,
-		GLASS_PLACE,
+		INSERT_GLASS,
 		WAIT_PREVIEW,
 		DECIDE_AND_TAKE,
-		TAKE_PICKUP,
-		TAKE_PLACE,
+		TAKE,
 		WAIT_RESULT
 	}
 
 	private boolean running;
 	private State state;
-	private int cooldown;                 // ticks until the next action runs
-	private int waitTicks;                // elapsed ticks in a WAIT_* state (timeout guard)
+	private int cooldown;   // ticks until the next action runs
+	private int waitTicks;  // elapsed ticks in a WAIT_* state (timeout guard)
 
 	private CartographyTableScreen boundScreen;
 
 	private boolean hasLastLocked;
 	private int lastLockedId;
 
-	private int srcMapSlotId = -1;        // where the current map came from (for cursor restore)
-	private int takenDestSlotId = -1;     // where the taken locked map was placed (to read its id)
-	private final Set<Integer> skippedMapIds = new HashSet<>(); // maps that produced no result
+	private int srcMapSlotId = -1;                          // map we just shift-clicked (for skip)
+	private final Set<Integer> skippedMapIds = new HashSet<>();
+	private final Set<Integer> emptyBeforeTake = new HashSet<>(); // empty player slots before a take
 
 	// -------------------------------------------------------------------------------------------
 
@@ -105,8 +102,8 @@ public final class AutoLockController {
 		this.hasLastLocked = false;
 		this.lastLockedId = -1;
 		this.srcMapSlotId = -1;
-		this.takenDestSlotId = -1;
 		this.skippedMapIds.clear();
+		this.emptyBeforeTake.clear();
 		chat("§b[RoundMapHunter] auto-lock started (target id = " + config.targetId + ")");
 		chat("§7 note: the final map id is only known after a lock is taken; the very first lock "
 				+ "cannot be predicted, so start below the target.");
@@ -124,154 +121,109 @@ public final class AutoLockController {
 		if (!running) {
 			return;
 		}
-		// Bail if the cartography screen is no longer the active screen (manual close / switch).
-		if (client.player == null || client.currentScreen != boundScreen) {
-			running = false;
+		if (client.player == null || client.interactionManager == null || client.currentScreen != boundScreen) {
+			running = false; // manual close / screen switch — leave everything as-is
 			return;
 		}
 		if (cooldown > 0) {
 			cooldown--;
 			return;
 		}
-
-		CartographyTableScreenHandler handler = boundScreen.getScreenHandler();
-		ClientPlayerEntity player = client.player;
-		ClientPlayerInteractionManager im = client.interactionManager;
-		if (im == null) {
-			return;
-		}
-
 		try {
-			step(client, player, im, handler);
+			step(client, client.player, client.interactionManager, boundScreen.getScreenHandler());
 		} catch (Exception e) {
 			RoundMapHunterClient.LOGGER.error("[autolock] unexpected error, aborting", e);
-			restoreCursorIfNeeded(player, im, handler);
-			terminate("§c[RoundMapHunter] internal error — stopped.", true, player);
+			terminate("§c[RoundMapHunter] internal error — stopped.", true, client.player);
 		}
 	}
 
 	private void step(MinecraftClient client, ClientPlayerEntity player,
 			ClientPlayerInteractionManager im, CartographyTableScreenHandler handler) {
-		RoundMapHunterConfig config = RoundMapHunterConfig.get();
-		int target = config.targetId;
+		int target = RoundMapHunterConfig.get().targetId;
 
 		switch (state) {
 			case CHECK_CURSOR -> {
 				if (!handler.getCursorStack().isEmpty()) {
-					// Player is holding something — never touch anything.
-					stopBecauseCursorBusy();
+					stopBecauseCursorBusy();          // never touch anything while the player holds an item
 					return;
 				}
-				// If the map slot already holds a map, skip insertion.
-				if (!handler.getSlot(CartographyTableScreenHandler.MAP_SLOT_INDEX).getStack().isEmpty()) {
-					state = State.GLASS_CHECK;
-				} else {
-					state = State.INSERT_MAP_PICKUP;
-				}
+				state = mapSlotStack(handler).isEmpty() ? State.INSERT_MAP : State.GLASS_CHECK;
 			}
-			case INSERT_MAP_PICKUP -> {
+			case INSERT_MAP -> {
 				int mapSlot = findUnlockedFilledMapPlayerSlot(client, handler);
 				if (mapSlot < 0) {
 					terminate("§6[RoundMapHunter] out of unlocked maps — stopping.", true, player);
 					return;
 				}
 				srcMapSlotId = mapSlot;
-				click(im, handler, mapSlot, player);   // pick up the map onto the cursor
+				quickMove(im, handler, mapSlot, player); // shift-click: routes to the map slot (0)
 				gap();
-				state = State.INSERT_MAP_PLACE;
+				state = State.VERIFY_MAP;
 			}
-			case INSERT_MAP_PLACE -> {
-				click(im, handler, CartographyTableScreenHandler.MAP_SLOT_INDEX, player); // place into slot 0
-				if (!handler.getCursorStack().isEmpty()) {
-					// Placement failed; put the map back and abort.
-					restoreCursorIfNeeded(player, im, handler);
-					terminate("§c[RoundMapHunter] could not place the map — stopped.", true, player);
-					return;
+			case VERIFY_MAP -> {
+				if (!mapSlotStack(handler).isEmpty()) {
+					state = State.GLASS_CHECK;
+				} else {
+					// The map did not move (unexpected). Skip it and try another.
+					int id = srcMapSlotId >= 0 ? mapId(handler.getSlot(srcMapSlotId).getStack()) : -1;
+					if (id >= 0) {
+						skippedMapIds.add(id);
+					}
+					state = State.INSERT_MAP;
 				}
-				gap();
-				state = State.GLASS_CHECK;
 			}
 			case GLASS_CHECK -> {
-				ItemStack material = handler.getSlot(CartographyTableScreenHandler.MATERIAL_SLOT_INDEX).getStack();
+				ItemStack material = materialSlotStack(handler);
 				if (!material.isEmpty() && material.getCount() >= 1) {
-					state = State.WAIT_PREVIEW;     // still have glass; go straight to the preview
 					waitTicks = 0;
+					state = State.WAIT_PREVIEW;      // still have glass; do not refill
 				} else {
-					state = State.GLASS_PICKUP;
+					state = State.INSERT_GLASS;
 				}
 			}
-			case GLASS_PICKUP -> {
+			case INSERT_GLASS -> {
 				int glassSlot = findGlassPanePlayerSlot(handler);
 				if (glassSlot < 0) {
 					terminate("§6[RoundMapHunter] out of glass panes — stopping.", true, player);
 					return;
 				}
-				click(im, handler, glassSlot, player);  // pick up the whole glass stack
-				gap();
-				state = State.GLASS_PLACE;
-			}
-			case GLASS_PLACE -> {
-				click(im, handler, CartographyTableScreenHandler.MATERIAL_SLOT_INDEX, player); // place stack
-				if (!handler.getCursorStack().isEmpty()) {
-					restoreCursorIfNeeded(player, im, handler);
-					terminate("§c[RoundMapHunter] could not place glass — stopped.", true, player);
-					return;
-				}
+				quickMove(im, handler, glassSlot, player); // shift-click: routes the whole stack to slot 1
 				gap();
 				waitTicks = 0;
 				state = State.WAIT_PREVIEW;
 			}
 			case WAIT_PREVIEW -> {
-				// The result is computed server-side; wait for it to arrive.
-				ItemStack result = handler.getSlot(CartographyTableScreenHandler.RESULT_SLOT_INDEX).getStack();
-				if (!result.isEmpty()) {
+				if (!resultSlotStack(handler).isEmpty()) {
 					state = State.DECIDE_AND_TAKE;
 					return;
 				}
 				if (++waitTicks > RmhConstants.SERVER_WAIT_TIMEOUT_TICKS) {
-					// No preview: the inserted map was probably already locked. Skip it.
-					handleNoPreview(player, im, handler);
+					skipUnusableMap(player, im, handler); // no preview: the map was probably already locked
 				}
 			}
 			case DECIDE_AND_TAKE -> {
-				// Predictive overshoot guard (safe for every lock after the first observation).
 				if (hasLastLocked && (lastLockedId + 1) > target) {
 					terminate("§6[RoundMapHunter] next lock (#" + (lastLockedId + 1)
 							+ ") would pass target #" + target + " — stopping without locking.", true, player);
 					return;
 				}
-				// Inventory-full guard: the taken locked map needs an empty slot (maps do not stack).
-				int dest = findEmptyPlayerSlot(handler);
-				if (dest < 0) {
+				if (findEmptyPlayerSlot(handler) < 0) {
 					terminate("§6[RoundMapHunter] inventory full — stopping.", true, player);
 					return;
 				}
-				takenDestSlotId = dest;
-				state = State.TAKE_PICKUP;
+				collectEmptyPlayerSlots(handler, emptyBeforeTake); // remember where the locked map may land
+				state = State.TAKE;
 			}
-			case TAKE_PICKUP -> {
-				click(im, handler, CartographyTableScreenHandler.RESULT_SLOT_INDEX, player); // take result
+			case TAKE -> {
+				quickMove(im, handler, CartographyTableScreenHandler.RESULT_SLOT_INDEX, player); // shift-click output
 				gap();
-				state = State.TAKE_PLACE;
-			}
-			case TAKE_PLACE -> {
-				click(im, handler, takenDestSlotId, player); // drop into the reserved empty slot
-				if (!handler.getCursorStack().isEmpty()) {
-					restoreCursorIfNeeded(player, im, handler);
-					terminate("§c[RoundMapHunter] could not stow the locked map — stopped.", true, player);
-					return;
-				}
 				waitTicks = 0;
 				state = State.WAIT_RESULT;
 			}
 			case WAIT_RESULT -> {
-				// Wait for the server to replace the predicted copy with the real locked map.
-				ItemStack stack = handler.getSlot(takenDestSlotId).getStack();
-				boolean resolved = stack.contains(DataComponentTypes.MAP_ID)
-						&& !stack.contains(DataComponentTypes.MAP_POST_PROCESSING);
-				if (resolved) {
-					MapIdComponent id = stack.get(DataComponentTypes.MAP_ID);
-					onLocked(player, id != null ? id.id() : -1, target);
+				int lockedId = findResolvedLockedMap(handler);
+				if (lockedId >= 0) {
+					onLocked(player, lockedId, target);
 					return;
 				}
 				if (++waitTicks > RmhConstants.SERVER_WAIT_TIMEOUT_TICKS) {
@@ -289,8 +241,7 @@ public final class AutoLockController {
 		hasLastLocked = true;
 
 		if (lockedId == target) {
-			// Success: keep the GUI open, play a client-local firework blast, log.
-			player.playSound(SoundEvents.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
+			player.playSound(SoundEvents.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f); // client-local, no packet
 			chat("§a[RoundMapHunter] success! locked map #" + lockedId + " (target reached).");
 			running = false;
 			return;
@@ -300,32 +251,24 @@ public final class AutoLockController {
 					+ " (first lock could not be predicted) — stopping.", true, player);
 			return;
 		}
-		// lockedId < target: keep going after the configured delay.
 		chat("§7[RoundMapHunter] locked #" + lockedId + ", continuing toward #" + target + "…");
 		cooldown = RoundMapHunterConfig.get().lockDelayTicks;
 		state = State.CHECK_CURSOR;
 	}
 
-	private void handleNoPreview(ClientPlayerEntity player, ClientPlayerInteractionManager im,
+	/** Move an unusable (no-preview) map out of the map slot, remember it, and look for another. */
+	private void skipUnusableMap(ClientPlayerEntity player, ClientPlayerInteractionManager im,
 			CartographyTableScreenHandler handler) {
-		// The map in slot 0 gave no result (already locked, or an unexpected combo). Skip it:
-		// remember its id and move it back to the inventory, then look for another map.
-		ItemStack inMap = handler.getSlot(CartographyTableScreenHandler.MAP_SLOT_INDEX).getStack();
-		if (inMap.contains(DataComponentTypes.MAP_ID)) {
-			MapIdComponent id = inMap.get(DataComponentTypes.MAP_ID);
-			if (id != null) {
-				skippedMapIds.add(id.id());
-			}
+		int id = mapId(mapSlotStack(handler));
+		if (id >= 0) {
+			skippedMapIds.add(id);
 		}
-		int dest = findEmptyPlayerSlot(handler);
-		if (dest < 0) {
+		if (findEmptyPlayerSlot(handler) < 0) {
 			terminate("§6[RoundMapHunter] inventory full while skipping an unusable map — stopping.", true, player);
 			return;
 		}
-		click(im, handler, CartographyTableScreenHandler.MAP_SLOT_INDEX, player); // pick up the map
+		quickMove(im, handler, CartographyTableScreenHandler.MAP_SLOT_INDEX, player); // slot 0 -> inventory
 		gap();
-		click(im, handler, dest, player);                                        // stow it
-		restoreCursorIfNeeded(player, im, handler);
 		state = State.CHECK_CURSOR;
 	}
 
@@ -343,29 +286,45 @@ public final class AutoLockController {
 	}
 
 	// -------------------------------------------------------------------------------------------
-	// Slot helpers — all resolve slot ids from the handler; nothing is hardcoded.
+	// Slot helpers — all resolve ids/roles from the handler; nothing is hardcoded.
 
-	private boolean isPlayerSlot(CartographyTableScreenHandler handler, Slot slot, PlayerInventory inv) {
+	private ItemStack mapSlotStack(CartographyTableScreenHandler h) {
+		return h.getSlot(CartographyTableScreenHandler.MAP_SLOT_INDEX).getStack();
+	}
+
+	private ItemStack materialSlotStack(CartographyTableScreenHandler h) {
+		return h.getSlot(CartographyTableScreenHandler.MATERIAL_SLOT_INDEX).getStack();
+	}
+
+	private ItemStack resultSlotStack(CartographyTableScreenHandler h) {
+		return h.getSlot(CartographyTableScreenHandler.RESULT_SLOT_INDEX).getStack();
+	}
+
+	private boolean isPlayerSlot(Slot slot, PlayerInventory inv) {
 		return slot.inventory == inv;
 	}
 
+	private int mapId(ItemStack stack) {
+		MapIdComponent id = stack.get(DataComponentTypes.MAP_ID);
+		return id == null ? -1 : id.id();
+	}
+
+	/** Scans the whole player inventory (main + hotbar) every time; never reuses a previous index. */
 	private int findUnlockedFilledMapPlayerSlot(MinecraftClient client, CartographyTableScreenHandler handler) {
 		PlayerInventory inv = client.player.getInventory();
 		for (Slot slot : handler.slots) {
-			if (!isPlayerSlot(handler, slot, inv)) {
+			if (!isPlayerSlot(slot, inv)) {
 				continue;
 			}
 			ItemStack stack = slot.getStack();
 			if (!stack.isOf(Items.FILLED_MAP) || !stack.contains(DataComponentTypes.MAP_ID)) {
 				continue;
 			}
-			MapIdComponent id = stack.get(DataComponentTypes.MAP_ID);
-			if (id != null && skippedMapIds.contains(id.id())) {
+			if (skippedMapIds.contains(mapId(stack))) {
 				continue;
 			}
-			// Prefer maps we can confirm are unlocked; if the MapState is not synced, try optimistically.
 			MapState ms = client.world == null ? null : FilledMapItem.getMapState(stack, client.world);
-			if (ms == null || !ms.locked) {
+			if (ms == null || !ms.locked) { // confirmed unlocked, or state not synced -> try it
 				return slot.id;
 			}
 		}
@@ -375,7 +334,7 @@ public final class AutoLockController {
 	private int findGlassPanePlayerSlot(CartographyTableScreenHandler handler) {
 		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
 		for (Slot slot : handler.slots) {
-			if (isPlayerSlot(handler, slot, inv) && slot.getStack().isOf(Items.GLASS_PANE)) {
+			if (isPlayerSlot(slot, inv) && slot.getStack().isOf(Items.GLASS_PANE)) {
 				return slot.id;
 			}
 		}
@@ -385,33 +344,47 @@ public final class AutoLockController {
 	private int findEmptyPlayerSlot(CartographyTableScreenHandler handler) {
 		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
 		for (Slot slot : handler.slots) {
-			if (isPlayerSlot(handler, slot, inv) && slot.getStack().isEmpty()) {
+			if (isPlayerSlot(slot, inv) && slot.getStack().isEmpty()) {
 				return slot.id;
 			}
 		}
 		return -1;
 	}
 
-	/** If our cursor ended up holding something, put it back into any empty inventory slot. */
-	private void restoreCursorIfNeeded(ClientPlayerEntity player, ClientPlayerInteractionManager im,
-			CartographyTableScreenHandler handler) {
-		if (handler.getCursorStack().isEmpty()) {
-			return;
+	private void collectEmptyPlayerSlots(CartographyTableScreenHandler handler, Set<Integer> out) {
+		out.clear();
+		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
+		for (Slot slot : handler.slots) {
+			if (isPlayerSlot(slot, inv) && slot.getStack().isEmpty()) {
+				out.add(slot.id);
+			}
 		}
-		int dest = findEmptyPlayerSlot(handler);
-		if (dest >= 0) {
-			click(im, handler, dest, player);
-		} else {
-			RoundMapHunterClient.LOGGER.warn("[autolock] cursor holds an item but no empty slot to restore it");
+	}
+
+	/**
+	 * After a shift-click take, the locked map lands in one of the slots that were empty beforehand.
+	 * Returns its id once the server has replaced the predicted copy (which still carries the LOCK
+	 * post-processing) with the real locked map, or -1 while still waiting.
+	 */
+	private int findResolvedLockedMap(CartographyTableScreenHandler handler) {
+		for (Slot slot : handler.slots) {
+			if (!emptyBeforeTake.contains(slot.id)) {
+				continue;
+			}
+			ItemStack stack = slot.getStack();
+			if (stack.contains(DataComponentTypes.MAP_ID) && !stack.contains(DataComponentTypes.MAP_POST_PROCESSING)) {
+				return mapId(stack);
+			}
 		}
+		return -1;
 	}
 
 	// -------------------------------------------------------------------------------------------
 
-	/** A single left-click on a slot — identical to a human clicking it. */
-	private void click(ClientPlayerInteractionManager im, CartographyTableScreenHandler handler,
+	/** A single shift-click on a slot — identical to a human shift-clicking it. */
+	private void quickMove(ClientPlayerInteractionManager im, CartographyTableScreenHandler handler,
 			int slotId, ClientPlayerEntity player) {
-		im.clickSlot(handler.syncId, slotId, 0, SlotActionType.PICKUP, player);
+		im.clickSlot(handler.syncId, slotId, 0, SlotActionType.QUICK_MOVE, player);
 	}
 
 	/** Small pause between individual clicks so we never spam packets within a cycle. */
