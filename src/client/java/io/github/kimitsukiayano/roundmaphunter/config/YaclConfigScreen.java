@@ -53,6 +53,45 @@ public final class YaclConfigScreen {
 						.step(1))
 				.build();
 
+		Option<Boolean> fastMode = Option.<Boolean>createBuilder()
+				.name(Text.literal("AUTO: fast mode"))
+				.description(OptionDescription.of(Text.literal(
+						"Skip per-lock id verification until close to the target. Assumes no one else in the "
+								+ "world is consuming map ids.")))
+				.binding(true, () -> cfg.fastMode, v -> cfg.fastMode = v)
+				.controller(TickBoxControllerBuilder::create)
+				.build();
+
+		Option<Integer> verifyThreshold = Option.<Integer>createBuilder()
+				.name(Text.literal("AUTO: verify threshold"))
+				.description(OptionDescription.of(Text.literal(
+						"Start verifying every lock once within this many locks of the target.")))
+				.binding(RmhConstants.DEFAULT_VERIFY_THRESHOLD, () -> cfg.verifyThreshold, v -> cfg.verifyThreshold = v)
+				.controller(opt -> IntegerSliderControllerBuilder.create(opt)
+						.range(RmhConstants.MIN_VERIFY_THRESHOLD, RmhConstants.MAX_VERIFY_THRESHOLD).step(1))
+				.build();
+
+		Option<Integer> containerTimeout = Option.<Integer>createBuilder()
+				.name(Text.literal("AUTO: container wait timeout (ticks)"))
+				.description(OptionDescription.of(Text.literal(
+						"How long to wait for a server container update before giving up.")))
+				.binding(RmhConstants.DEFAULT_CONTAINER_TIMEOUT_TICKS,
+						() -> cfg.containerWaitTimeoutTicks, v -> cfg.containerWaitTimeoutTicks = v)
+				.controller(opt -> IntegerSliderControllerBuilder.create(opt)
+						.range(RmhConstants.MIN_CONTAINER_TIMEOUT_TICKS, RmhConstants.MAX_CONTAINER_TIMEOUT_TICKS)
+						.step(5))
+				.build();
+
+		Option<Integer> minInterval = Option.<Integer>createBuilder()
+				.name(Text.literal("AUTO: min action interval (ticks)"))
+				.description(OptionDescription.of(Text.literal(
+						"Minimum ticks between actions (floor, so the loop never spams).")))
+				.binding(RmhConstants.DEFAULT_MIN_ACTION_INTERVAL_TICKS,
+						() -> cfg.minActionIntervalTicks, v -> cfg.minActionIntervalTicks = v)
+				.controller(opt -> IntegerSliderControllerBuilder.create(opt)
+						.range(RmhConstants.MIN_ACTION_INTERVAL_TICKS, RmhConstants.MAX_ACTION_INTERVAL_TICKS).step(1))
+				.build();
+
 		return YetAnotherConfigLib.createBuilder()
 				.title(Text.literal("Round-Numbered Map ID Hunter"))
 				.category(ConfigCategory.createBuilder()
@@ -61,6 +100,10 @@ public final class YaclConfigScreen {
 						.option(showAuto)
 						.option(targetId)
 						.option(delay)
+						.option(fastMode)
+						.option(verifyThreshold)
+						.option(containerTimeout)
+						.option(minInterval)
 						.build())
 				.save(() -> {
 					cfg.sanitize();

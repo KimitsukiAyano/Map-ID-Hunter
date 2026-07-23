@@ -49,4 +49,17 @@ public final class RmhConstants {
 	// ---- Internal pacing ----
 	public static final int INTER_ACTION_TICKS = 2;         // gap between clicks within one cycle
 	public static final int SERVER_WAIT_TIMEOUT_TICKS = 60; // give up waiting on the server after ~3s
+
+	// ---- AUTO loop tuning ----
+	public static final int DEFAULT_VERIFY_THRESHOLD = 3;
+	public static final int MIN_VERIFY_THRESHOLD = 0;
+	public static final int MAX_VERIFY_THRESHOLD = 50;
+	public static final int DEFAULT_CONTAINER_TIMEOUT_TICKS = 60;
+	public static final int MIN_CONTAINER_TIMEOUT_TICKS = 20;
+	public static final int MAX_CONTAINER_TIMEOUT_TICKS = 200;
+	public static final int DEFAULT_MIN_ACTION_INTERVAL_TICKS = 1;
+	public static final int MIN_ACTION_INTERVAL_TICKS = 1;     // safety floor: never spam
+	public static final int MAX_ACTION_INTERVAL_TICKS = 20;
+	public static final int CRAFT_COOLDOWN_TICKS = 5;         // spacing between empty-map uses
+	public static final int RETRY_LIMIT = 5;                  // hotbar switch / reopen retries
 }

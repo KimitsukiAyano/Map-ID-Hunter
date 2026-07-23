@@ -27,8 +27,18 @@ public class RoundMapHunterConfig {
 	public boolean showAutoButton = true;
 	/** Target map id T (must be &gt;= 0). */
 	public int targetId = 0;
-	/** Ticks to wait between consecutive lock operations. */
+	/** Ticks to wait between consecutive lock operations (RUN button). */
 	public int lockDelayTicks = RmhConstants.DEFAULT_LOCK_DELAY_TICKS;
+
+	// ---- AUTO loop tuning ----
+	/** AUTO: skip per-lock id verification until close to the target (assumes no other id consumers). */
+	public boolean fastMode = true;
+	/** AUTO: start verifying every lock once within this many locks of the target. */
+	public int verifyThreshold = RmhConstants.DEFAULT_VERIFY_THRESHOLD;
+	/** AUTO: max ticks to wait for a server container update before giving up. */
+	public int containerWaitTimeoutTicks = RmhConstants.DEFAULT_CONTAINER_TIMEOUT_TICKS;
+	/** AUTO: minimum ticks between actions (floor, so we never spam). */
+	public int minActionIntervalTicks = RmhConstants.DEFAULT_MIN_ACTION_INTERVAL_TICKS;
 
 	public static RoundMapHunterConfig get() {
 		if (instance == null) {
@@ -48,6 +58,13 @@ public class RoundMapHunterConfig {
 		if (lockDelayTicks > RmhConstants.MAX_LOCK_DELAY_TICKS) {
 			lockDelayTicks = RmhConstants.MAX_LOCK_DELAY_TICKS;
 		}
+		if (verifyThreshold < RmhConstants.MIN_VERIFY_THRESHOLD) {
+			verifyThreshold = RmhConstants.MIN_VERIFY_THRESHOLD;
+		}
+		containerWaitTimeoutTicks = Math.max(RmhConstants.MIN_CONTAINER_TIMEOUT_TICKS,
+				Math.min(RmhConstants.MAX_CONTAINER_TIMEOUT_TICKS, containerWaitTimeoutTicks));
+		minActionIntervalTicks = Math.max(RmhConstants.MIN_ACTION_INTERVAL_TICKS,
+				Math.min(RmhConstants.MAX_ACTION_INTERVAL_TICKS, minActionIntervalTicks));
 	}
 
 	public static RoundMapHunterConfig load() {
