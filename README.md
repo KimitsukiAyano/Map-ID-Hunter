@@ -60,8 +60,7 @@ The mod works without ModMenu / YACL; settings are stored in `config/roundmaphun
 
 ## Usage
 
-1. Bring the counter **close to** your target first. (The mod does not automate "using" maps to
-   approach the target — that part is up to you.)
+1. Bring the counter **close to** your target first. 
 2. Open the cartography table and type the target ID into the **target-ID field**.
 3. Press **RUN** to only lock completed maps, or **AUTO** to run the full loop from empty maps.
 4. When the target ID is locked, the GUI stays open, a firework-blast sound plays, and a success
