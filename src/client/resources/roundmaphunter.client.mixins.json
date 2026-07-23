@@ -4,7 +4,9 @@
 	"package": "io.github.kimitsukiayano.roundmaphunter.mixin.client",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
-		"CartographyTableScreenMixin"
+		"CartographyTableScreenMixin",
+		"MinecraftClientAccessor",
+		"MinecraftClientMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

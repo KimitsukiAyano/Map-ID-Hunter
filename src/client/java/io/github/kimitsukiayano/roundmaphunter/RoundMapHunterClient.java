@@ -1,7 +1,6 @@
 package io.github.kimitsukiayano.roundmaphunter;
 
 import io.github.kimitsukiayano.roundmaphunter.autolock.AutoLockController;
-import io.github.kimitsukiayano.roundmaphunter.autolock.AutoLoopController;
 import io.github.kimitsukiayano.roundmaphunter.config.RoundMapHunterConfig;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -24,8 +23,9 @@ public class RoundMapHunterClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		RoundMapHunterConfig.load();
+		// RUN: container clicks only (no world use/placement) — fine to run at end of tick.
 		ClientTickEvents.END_CLIENT_TICK.register(AutoLockController.INSTANCE::tick);
-		ClientTickEvents.END_CLIENT_TICK.register(AutoLoopController.INSTANCE::tick);
+		// AUTO is driven from MinecraftClientMixin (just before movement packets), not from here.
 		LOGGER.info("[{}] client initialized (enabled={})", MOD_ID, RoundMapHunterConfig.get().enabled);
 	}
 

@@ -60,6 +60,6 @@ public final class RmhConstants {
 	public static final int DEFAULT_MIN_ACTION_INTERVAL_TICKS = 1;
 	public static final int MIN_ACTION_INTERVAL_TICKS = 1;     // safety floor: never spam
 	public static final int MAX_ACTION_INTERVAL_TICKS = 20;
-	public static final int CRAFT_COOLDOWN_TICKS = 5;         // spacing between empty-map uses
+	public static final int VANILLA_ITEM_USE_COOLDOWN_TICKS = 4; // matches MinecraftClient.doItemUse
 	public static final int RETRY_LIMIT = 5;                  // hotbar switch / reopen retries
 }

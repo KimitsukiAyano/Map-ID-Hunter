@@ -3,6 +3,7 @@ package io.github.kimitsukiayano.roundmaphunter.autolock;
 import io.github.kimitsukiayano.roundmaphunter.RmhConstants;
 import io.github.kimitsukiayano.roundmaphunter.RoundMapHunterClient;
 import io.github.kimitsukiayano.roundmaphunter.config.RoundMapHunterConfig;
+import io.github.kimitsukiayano.roundmaphunter.mixin.client.MinecraftClientAccessor;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.CartographyTableScreen;
@@ -375,12 +376,16 @@ public final class AutoLoopController {
 					phase = Phase.REOPEN;
 					return;
 				}
+				MinecraftClientAccessor acc = (MinecraftClientAccessor) client;
+				if (acc.roundmaphunter$getItemUseCooldown() > 0) {
+					return; // respect the vanilla item-use cooldown; one use per cooldown, never shortened
+				}
 				im.interactItem(player, Hand.MAIN_HAND); // fill one empty map (sneak-use packet, no GUI)
+				acc.roundmaphunter$setItemUseCooldown(RmhConstants.VANILLA_ITEM_USE_COOLDOWN_TICKS);
 				if (hasKnownNext) {
 					knownNext++; // filling advances the world counter by one
 				}
 				batchRemaining--;
-				cooldown = RmhConstants.CRAFT_COOLDOWN_TICKS;
 			}
 			case REOPEN -> {
 				BlockHitResult hit = aimCartography(client);
@@ -393,13 +398,17 @@ public final class AutoLoopController {
 					phase = Phase.LOCK_ENSURE_MAP; // reopened successfully
 					return;
 				}
+				MinecraftClientAccessor acc = (MinecraftClientAccessor) client;
+				if (acc.roundmaphunter$getItemUseCooldown() > 0) {
+					return; // respect the vanilla item-use cooldown between placement attempts
+				}
 				if (retryCount++ > RmhConstants.RETRY_LIMIT) {
 					stop("§c[RoundMapHunter] could not reopen the cartography table (are you sneaking?) — "
 							+ "AUTO stopping.", false, null);
 					return;
 				}
 				im.interactBlock(player, Hand.MAIN_HAND, hit);
-				cooldown = Math.max(config.minActionIntervalTicks, 2);
+				acc.roundmaphunter$setItemUseCooldown(RmhConstants.VANILLA_ITEM_USE_COOLDOWN_TICKS);
 			}
 			default -> running = false;
 		}
