@@ -1,125 +1,140 @@
 # Round-Numbered Map ID Hunter
 
-Minecraft (Fabric) のクライアント Mod。**製図台での地図ロックを半自動化**し、`#777` や `#10000` のような
-**キリ番のマップ ID** を狙って取得するのを補助します。
+A client-side Minecraft (Fabric) mod that **semi-automates locking maps at the cartography table**
+to help you obtain **round-numbered map IDs** such as `#777` or `#10000`.
 
-> クライアント専用 Mod です。サーバーには何も導入しません。
+> Client-side only. Nothing is installed on the server.
 
 ---
 
-## この Mod がやること
+## What it does
 
-Minecraft では「次に配られる地図 ID」を管理するカウンタがあり、
+Minecraft keeps a counter for "the next map ID to be issued":
 
-- 空の地図を記入する → カウンタが 1 進む
-- 製図台で「地図 + ガラス板」でロックする → ロックされたコピーに新しい ID が割り当たり、カウンタがさらに 1 進む
+- Filling an empty map advances the counter by 1.
+- Locking a map with a glass pane at the cartography table assigns a new ID to the locked copy and
+  advances the counter by 1 more.
 
-という仕様になっています。キリ番 ID を狙うときは、目的 ID の手前までカウンタを近づけてから
-「地図を使う → 製図台でロック」を繰り返し、ロックされたコピーが目的 ID になった所で止めます。
+To land on a round number you bring the counter close to the target, then repeat
+"use a map → lock it at the cartography table" until a locked copy hits the target ID.
 
-この Mod は製図台画面に**2 つのボタン**と**目的 ID 入力欄**を追加し、その繰り返し作業を肩代わりします。
+This mod adds **two buttons** and a **target-ID field** to the cartography screen and does that
+repetition for you.
 
-| ボタン | 位置 | 動作 |
+| Button | Position | Behaviour |
 | --- | --- | --- |
-| **RUN** | 矢印の下 | 製図台 GUI が開いている間だけ動作。インベントリ内の**完成地図をロックするだけ**（作成・GUI 開閉・廃棄・持ち替えは一切しない完全フェア版）。 |
-| **AUTO** | 矢印の上 | 全自動ループ。ロック → 不要地図の廃棄 → GUI を閉じる → 空の地図から完成地図を作成 → 製図台を開き直す → 再ロック、を**目的 ID 到達まで無人で繰り返す**。 |
+| **RUN** | below the arrow | Works only while the cartography GUI is open. **Only locks completed maps** already in your inventory — it never crafts, opens/closes the GUI, discards, or swaps hotbar slots (the fully "fair" mode). |
+| **AUTO** | above the arrow | Full unattended loop: lock → discard unwanted maps → close the GUI → craft completed maps from empty maps → reopen the table → lock again, **repeating until the target ID is reached**. |
 
-- **目的 ID 入力欄**：地図プレビューの上の隙間。数字のみ・最大 10 桁。設定の目的 ID と同じ値を共有し、変更は即保存されます。空欄・不正値のときは両ボタンが無効になります。
-- どちらかが実行中はもう一方が無効化（排他）。実行中はラベルが `Stop` に変わります。
-- 実行中にボタンを再クリックで停止（トグル）。
-
----
-
-## フェアネス方針（設計上の絶対条件）
-
-- **独自パケットを一切作らない。** すべてバニラのクライアント処理をそのまま呼びます。
-- インベントリ操作は `ClientPlayerInteractionManager#clickSlot` を、**人間がスロットをクリック/シフトクリック/ドロップしたのと同一のパケット**になるように呼びます（`QUICK_MOVE` = シフトクリック、`THROW` = ドロップキー）。スロット index はハードコードせず `CartographyTableScreenHandler` の定数から解決します。
-- 空の地図の記入は `interactItem`（スニーク中に右クリックしたのと同じ使用パケット）で行い、視点を製図台に向けたまま GUI を開かずに作成します。
-- ホットバーの持ち替えは `selectedSlot` を直接書き換えず、バニラのホットバー用キーバインドを押下します。
-- **視点（yaw/pitch）は Mod から一切変更しません。オートエイムはありません。** 製図台を開く際は常にその時点の `crosshairTarget` を使い、製図台を狙っていなければ停止します。
-- 連射・パケットスパムを避けるため、各操作の間隔には調整可能な下限を設けています。
-- プレイヤーがカーソルでアイテムを掴んでいる間は一切触りません。
-
-> 目的 ID の「確定値」は 1.21.11 では取り出して初めてサーバーが割り当てるため、Mod は**取り出した地図の実 ID を観測**して次の ID を予測します。ロック ID は連続するので、最初の 1 個を観測した後は目的 ID ちょうどで止められます（**最初の 1 ロックだけは予測不可**なので、目的 ID より手前から始めてください）。
+- **Target-ID field**: in the gap above the map preview. Digits only, up to 10 characters. It shares
+  the same value as the config target ID and saves immediately on change. Both buttons are disabled
+  while the field is empty or invalid.
+- The two buttons are mutually exclusive: while one is running the other is disabled. The running
+  button's label changes to `Stop`.
+- Click a running button again to stop it (toggle).
 
 ---
 
-## 動作環境
+## Fairness policy (a hard design requirement)
 
-| 項目 | バージョン |
+- **No custom packets are ever built.** Everything calls vanilla client code directly.
+- Inventory actions go through `ClientPlayerInteractionManager#clickSlot` so the packets are
+  **identical to a human clicking / shift-clicking / dropping** a slot (`QUICK_MOVE` = shift-click,
+  `THROW` = drop key). Slot indices are resolved from `CartographyTableScreenHandler` constants, never
+  hardcoded.
+- Filling empty maps uses `interactItem` (the same use packet as right-clicking while sneaking), so
+  maps are crafted without opening the table's GUI while you keep aiming at it.
+- Hotbar switching presses the vanilla hotbar key-binding instead of writing `selectedSlot` directly.
+- **The mod never changes your view (yaw/pitch); there is no auto-aim.** It always uses your current
+  `crosshairTarget` when opening the table and stops if you are not aiming at a cartography table.
+- To avoid packet spam, every action is paced by a configurable minimum interval.
+- It never touches anything while the player's cursor is holding an item.
+
+> On 1.21.11 the final locked ID is assigned by the server only when the result is taken, so the mod
+> **observes the real ID of each map it takes** to predict the next one. Locked IDs are consecutive,
+> so after observing the first one it can stop exactly at the target. (**Only the very first lock is
+> unpredictable** — start below the target.)
+
+---
+
+## Requirements
+
+| Item | Version |
 | --- | --- |
 | Minecraft | 1.21.11 |
-| ローダー | Fabric Loader 0.18.4 以上 |
+| Loader | Fabric Loader 0.18.4 or newer |
 | Java | 21 |
-| 必須 | Fabric API (`0.141.5+1.21.11` で検証) |
-| 任意（設定 GUI 用） | ModMenu `17.0.0` + YACL `3.8.2+1.21.11-fabric` |
+| Required | Fabric API (verified with `0.141.5+1.21.11`) |
+| Optional (settings GUI) | ModMenu `17.0.0` + YACL `3.8.2+1.21.11-fabric` |
 
-ビルドツールチェーン: Fabric Loom 1.14.10 / Yarn `1.21.11+build.6` / Gradle 9.x。
-
----
-
-## 導入
-
-1. Fabric Loader と **Fabric API** を導入する。
-2. （任意）ゲーム内から設定したい場合は **ModMenu** と **YACL** も導入する。
-3. `roundmaphunter-<version>.jar` を `mods/` フォルダに入れる。
-
-ModMenu / YACL が無くても本体は動作し、設定は `config/roundmaphunter.json` に保存されます。
+Build toolchain: Fabric Loom 1.14.10 / Yarn `1.21.11+build.6` / Gradle 9.x.
 
 ---
 
-## 使い方
+## Installation
 
-1. 目的 ID の**手前**までカウンタを近づけておく（この Mod は「地図を使う」側は自動化しません。手前寄せはプレイヤーが行う前提です）。
-2. 製図台を開き、**目的 ID 入力欄**に狙う ID を入力する。
-3. 完成地図をロックするだけなら **RUN**、空の地図から全自動で回すなら **AUTO** を押す。
-4. 目的 ID をロックできると GUI は開いたまま、花火の爆発音が鳴り、成功ログが出ます。
+1. Install Fabric Loader and **Fabric API**.
+2. (Optional) Install **ModMenu** and **YACL** if you want the in-game settings screen.
+3. Drop `roundmaphunter-<version>.jar` into your `mods/` folder.
 
-> AUTO を使うときは、まず**小さめの差（目的 ID の 2〜3 手前）**から試すのがおすすめです。
+The mod works without ModMenu / YACL; settings are stored in `config/roundmaphunter.json` either way.
 
 ---
 
-## 設定
+## Usage
 
-`config/roundmaphunter.json`（または ModMenu → 本 Mod → 設定）:
+1. Bring the counter **close to** your target first. (The mod does not automate "using" maps to
+   approach the target — that part is up to you.)
+2. Open the cartography table and type the target ID into the **target-ID field**.
+3. Press **RUN** to only lock completed maps, or **AUTO** to run the full loop from empty maps.
+4. When the target ID is locked, the GUI stays open, a firework-blast sound plays, and a success
+   message is logged.
 
-| 設定 | 説明 |
+> When using AUTO, try a **small gap first** (2–3 below the target).
+
+---
+
+## Configuration
+
+`config/roundmaphunter.json` (or ModMenu → this mod → settings):
+
+| Setting | Description |
 | --- | --- |
-| Enabled | 機能全体の ON/OFF（ボタン表示も兼ねる）。 |
-| Show AUTO button | AUTO ボタンだけを隠せる。 |
-| Target map id (T) | 目的 ID。GUI の入力欄と同じ値。 |
-| Lock delay (ticks) | RUN のロック間ディレイ（1 から）。 |
-| AUTO: fast mode | 目的 ID 手前まで ID 検証を省いて高速化（他に地図 ID を消費する人がいない前提）。 |
-| AUTO: verify threshold | 目的 ID まで残りこの数以内になったら毎回検証を始める。 |
-| AUTO: container wait timeout | サーバーのコンテナ更新を待つ上限 tick。 |
-| AUTO: min action interval | 各操作の最小間隔 tick（下限）。 |
+| Enabled | Master on/off (also gates whether the buttons are shown). |
+| Show AUTO button | Hide just the AUTO button. |
+| Target map id (T) | The target ID; the same value as the in-GUI field. |
+| Lock delay (ticks) | RUN's delay between locks (from 1). |
+| AUTO: fast mode | Skip per-lock ID verification until near the target (assumes no one else consumes map IDs). |
+| AUTO: verify threshold | Start verifying every lock once within this many locks of the target. |
+| AUTO: container wait timeout | Max ticks to wait for a server container update. |
+| AUTO: min action interval | Minimum ticks between actions (floor). |
 
 ---
 
-## ビルド
+## Building
 
 ```bash
 ./gradlew build
 ```
 
-生成物は `build/libs/roundmaphunter-<version>.jar`。
+The output is `build/libs/roundmaphunter-<version>.jar`.
 
 ---
 
-## クラス構成（概要）
+## Class layout (overview)
 
-| クラス | 役割 |
+| Class | Role |
 | --- | --- |
-| `RoundMapHunterClient` | クライアントエントリポイント。config 読み込みと tick 登録。 |
-| `mixin.client.CartographyTableScreenMixin` | 製図台画面に RUN/AUTO ボタンと目的 ID 入力欄を追加。フォーカス中の数字キーを消費してホットバー誤爆を防止。 |
-| `autolock.AutoLockController` | RUN：フェアな単一コンテナ内ロック（`clickSlot` のみ）。 |
-| `autolock.AutoLoopController` | AUTO：作成〜開き直しを含む全自動ループ（観測ベース N）。 |
-| `config.RoundMapHunterConfig` | JSON 永続化される設定データ。 |
-| `config.YaclConfigScreen` / `ModMenuIntegration` | ModMenu + YACL の設定画面。 |
-| `RmhConstants` | ボタン座標・ディレイ下限など調整用定数の集約先。 |
+| `RoundMapHunterClient` | Client entrypoint: loads config and registers ticks. |
+| `mixin.client.CartographyTableScreenMixin` | Adds the RUN/AUTO buttons and target-ID field to the cartography screen; consumes keys while the field is focused so number keys don't trigger hotbar swaps. |
+| `autolock.AutoLockController` | RUN: fair, single-container locking (`clickSlot` only). |
+| `autolock.AutoLoopController` | AUTO: full auto-loop including crafting and reopening (observation-based N). |
+| `config.RoundMapHunterConfig` | JSON-persisted settings data. |
+| `config.YaclConfigScreen` / `ModMenuIntegration` | ModMenu + YACL settings screen. |
+| `RmhConstants` | Single home for tuning constants (button coords, delay floors, etc.). |
 
 ---
 
-## ライセンス
+## License
 
 [MIT](LICENSE)

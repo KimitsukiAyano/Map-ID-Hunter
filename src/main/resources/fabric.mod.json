@@ -3,7 +3,7 @@
 	"id": "roundmaphunter",
 	"version": "${version}",
 	"name": "Round-Numbered Map ID Hunter",
-	"description": "製図台での地図ロックを半自動化し、キリ番マップID（#777 など）の取得を補助するクライアント Mod。",
+	"description": "A client-side mod that semi-automates cartography-table map locking to help obtain round-numbered map IDs (e.g. #777).",
 	"authors": [
 		"KimitsukiAyano"
 	],
