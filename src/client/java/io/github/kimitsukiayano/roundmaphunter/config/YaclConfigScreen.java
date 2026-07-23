@@ -27,6 +27,14 @@ public final class YaclConfigScreen {
 				.controller(TickBoxControllerBuilder::create)
 				.build();
 
+		Option<Boolean> showAuto = Option.<Boolean>createBuilder()
+				.name(Text.literal("Show AUTO button"))
+				.description(OptionDescription.of(Text.literal(
+						"Show the AUTO (full auto-loop) button on the cartography screen.")))
+				.binding(true, () -> cfg.showAutoButton, v -> cfg.showAutoButton = v)
+				.controller(TickBoxControllerBuilder::create)
+				.build();
+
 		Option<Integer> targetId = Option.<Integer>createBuilder()
 				.name(Text.literal("Target map id (T)"))
 				.description(OptionDescription.of(Text.literal(
@@ -50,6 +58,7 @@ public final class YaclConfigScreen {
 				.category(ConfigCategory.createBuilder()
 						.name(Text.literal("General"))
 						.option(enabled)
+						.option(showAuto)
 						.option(targetId)
 						.option(delay)
 						.build())

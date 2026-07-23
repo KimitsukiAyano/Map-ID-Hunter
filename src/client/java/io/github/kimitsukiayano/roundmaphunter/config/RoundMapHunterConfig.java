@@ -21,8 +21,10 @@ public class RoundMapHunterConfig {
 
 	private static RoundMapHunterConfig instance;
 
-	/** Master on/off. Also gates whether the cartography button is shown. */
+	/** Master on/off. Also gates whether the cartography widgets are shown. */
 	public boolean enabled = true;
+	/** Show the AUTO (full auto-loop) button. Independent of {@link #enabled}. */
+	public boolean showAutoButton = true;
 	/** Target map id T (must be &gt;= 0). */
 	public int targetId = 0;
 	/** Ticks to wait between consecutive lock operations. */
