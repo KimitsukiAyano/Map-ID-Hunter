@@ -62,8 +62,10 @@ public final class AutoLoopController {
 		LOCK_WAIT_PREVIEW,
 		LOCK_TAKE,
 		LOCK_WAIT_RESULT,
-		PLAN_BATCH,
+		REPLENISH_CHECK,
 		DISCARD,
+		DISCARD_CONFIRM,
+		PLAN_BATCH,
 		CLOSE_GUI,
 		SELECT_HOTBAR,
 		CRAFT,
@@ -81,11 +83,11 @@ public final class AutoLoopController {
 	private int knownNext;          // id the next lock will produce (== world counter), once known
 
 	private final Set<Integer> skippedMapIds = new HashSet<>();
-	private final Set<Integer> lockedUnwantedIds = new HashSet<>(); // maps we locked with id < T
 	private final Set<Integer> emptyBeforeTake = new HashSet<>();
 
 	private int batchRemaining;     // crafts left to do this batch
 	private int assumedTakeId;      // fast-mode: id we assume the current take produced
+	private int discardAttempts;    // guard against an endless discard loop
 
 	// -------------------------------------------------------------------------------------------
 
@@ -123,7 +125,6 @@ public final class AutoLoopController {
 		hasKnownNext = false;
 		knownNext = -1;
 		skippedMapIds.clear();
-		lockedUnwantedIds.clear();
 		emptyBeforeTake.clear();
 		batchRemaining = 0;
 		chat("§d[RoundMapHunter] AUTO started (target #" + targetT + "). First lock cannot be predicted; "
@@ -185,7 +186,7 @@ public final class AutoLoopController {
 				}
 				int mapSlot = findCompletedUnlockedMap(client, h);
 				if (mapSlot < 0) {
-					phase = Phase.PLAN_BATCH; // out of completed maps: craft more
+					phase = Phase.REPLENISH_CHECK; // out of completed maps: discard leftovers, then craft
 					return;
 				}
 				quickMove(im, h, mapSlot, player);
@@ -268,9 +269,6 @@ public final class AutoLoopController {
 				} else {
 					// Fast mode: trust the deterministic id, don't wait to read it.
 					if (hasKnownNext) {
-						if (assumedTakeId < targetT) {
-							lockedUnwantedIds.add(assumedTakeId);
-						}
 						knownNext++;
 					}
 					phase = Phase.LOCK_ENSURE_MAP;
@@ -291,8 +289,59 @@ public final class AutoLoopController {
 				}
 			}
 
-			// ---------------- Replenish (decide, discard, close, craft, reopen) ----------------
+			// ---------------- Replenish: check → discard ALL filled maps → size batch → craft ----------------
+			case REPLENISH_CHECK -> {
+				CartographyTableScreenHandler h = requireOpen(client, player);
+				if (h == null) {
+					return;
+				}
+				if (hasKnownNext && targetT - knownNext <= 0) {
+					stop("§6[RoundMapHunter] target #" + targetT + " is no longer reachable — AUTO stopping.",
+							true, player);
+					return;
+				}
+				discardAttempts = 0;
+				phase = Phase.DISCARD;
+			}
+			case DISCARD -> {
+				// Discard EVERY completed map (locked or not), one per tick, re-scanning each time so we
+				// never rely on a stale snapshot. Empty maps and glass panes are never touched.
+				CartographyTableScreenHandler h = requireOpen(client, player);
+				if (h == null) {
+					return;
+				}
+				int slot = findFirstFilledMapSlot(h);
+				if (slot >= 0) {
+					if (discardAttempts++ > countPlayerSlots(h) * 2) {
+						stop("§c[RoundMapHunter] could not discard leftover maps — AUTO stopping.", true, player);
+						return;
+					}
+					im.clickSlot(h.syncId, slot, 1, SlotActionType.THROW, player); // = drop-stack key (Q)
+					gap(config);
+					return; // re-scan next tick
+				}
+				waitTicks = 0;
+				phase = Phase.DISCARD_CONFIRM;
+			}
+			case DISCARD_CONFIRM -> {
+				// Gate: proceed only when a re-scan AFTER a container-settle wait still shows zero completed
+				// maps (guards against a client-prediction vs server-confirmation mismatch).
+				CartographyTableScreenHandler h = requireOpen(client, player);
+				if (h == null) {
+					return;
+				}
+				if (++waitTicks < RmhConstants.DISCARD_CONFIRM_TICKS) {
+					return;
+				}
+				if (findFirstFilledMapSlot(h) >= 0) {
+					phase = Phase.DISCARD; // one remained / reappeared — keep discarding
+					return;
+				}
+				skippedMapIds.clear();
+				phase = Phase.PLAN_BATCH;
+			}
 			case PLAN_BATCH -> {
+				// Size the craft batch from the POST-discard free slots (not before/during discard).
 				CartographyTableScreenHandler h = requireOpen(client, player);
 				if (h == null) {
 					return;
@@ -303,8 +352,8 @@ public final class AutoLoopController {
 				} else {
 					int d = targetT - knownNext;
 					if (d <= 0) {
-						stop("§6[RoundMapHunter] no completed map is available at the right count to reach #"
-								+ targetT + " — AUTO stopping.", true, player);
+						stop("§6[RoundMapHunter] target #" + targetT + " is no longer reachable — AUTO stopping.",
+								true, player);
 						return;
 					}
 					int cap = Math.min(countEmptyMaps(client), countFreeSlots(h));
@@ -315,19 +364,6 @@ public final class AutoLoopController {
 					return;
 				}
 				batchRemaining = m;
-				phase = Phase.DISCARD;
-			}
-			case DISCARD -> {
-				CartographyTableScreenHandler h = requireOpen(client, player);
-				if (h == null) {
-					return;
-				}
-				int slot = findUnwantedLockedSlot(h);
-				if (slot >= 0) {
-					im.clickSlot(h.syncId, slot, 1, SlotActionType.THROW, player); // = drop-stack key on the slot
-					gap(config);
-					return; // one drop per tick; re-scan next tick
-				}
 				phase = Phase.CLOSE_GUI;
 			}
 			case CLOSE_GUI -> {
@@ -430,7 +466,6 @@ public final class AutoLoopController {
 					+ " (first lock could not be predicted) — AUTO stopping.", true, player);
 			return;
 		}
-		lockedUnwantedIds.add(lockedId);
 		RoundMapHunterConfig config = RoundMapHunterConfig.get();
 		gap(config);
 		phase = Phase.LOCK_ENSURE_MAP;
@@ -558,14 +593,25 @@ public final class AutoLoopController {
 		return -1;
 	}
 
-	private int findUnwantedLockedSlot(CartographyTableScreenHandler h) {
+	private int findFirstFilledMapSlot(CartographyTableScreenHandler h) {
 		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
 		for (Slot slot : h.slots) {
-			if (isPlayerSlot(slot, inv) && lockedUnwantedIds.contains(mapId(slot.getStack()))) {
+			if (isPlayerSlot(slot, inv) && slot.getStack().isOf(Items.FILLED_MAP)) {
 				return slot.id;
 			}
 		}
 		return -1;
+	}
+
+	private int countPlayerSlots(CartographyTableScreenHandler h) {
+		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
+		int n = 0;
+		for (Slot slot : h.slots) {
+			if (isPlayerSlot(slot, inv)) {
+				n++;
+			}
+		}
+		return n;
 	}
 
 	private int countEmptyMaps(MinecraftClient client) {

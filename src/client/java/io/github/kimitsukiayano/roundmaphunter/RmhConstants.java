@@ -62,4 +62,5 @@ public final class RmhConstants {
 	public static final int MAX_ACTION_INTERVAL_TICKS = 20;
 	public static final int VANILLA_ITEM_USE_COOLDOWN_TICKS = 4; // matches MinecraftClient.doItemUse
 	public static final int RETRY_LIMIT = 5;                  // hotbar switch / reopen retries
+	public static final int DISCARD_CONFIRM_TICKS = 10;      // settle wait before confirming 0 maps left
 }
