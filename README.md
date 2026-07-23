@@ -34,28 +34,6 @@ repetition for you.
 
 ---
 
-## Fairness policy (a hard design requirement)
-
-- **No custom packets are ever built.** Everything calls vanilla client code directly.
-- Inventory actions go through `ClientPlayerInteractionManager#clickSlot` so the packets are
-  **identical to a human clicking / shift-clicking / dropping** a slot (`QUICK_MOVE` = shift-click,
-  `THROW` = drop key). Slot indices are resolved from `CartographyTableScreenHandler` constants, never
-  hardcoded.
-- Filling empty maps uses `interactItem` (the same use packet as right-clicking while sneaking), so
-  maps are crafted without opening the table's GUI while you keep aiming at it.
-- Hotbar switching presses the vanilla hotbar key-binding instead of writing `selectedSlot` directly.
-- **The mod never changes your view (yaw/pitch); there is no auto-aim.** It always uses your current
-  `crosshairTarget` when opening the table and stops if you are not aiming at a cartography table.
-- To avoid packet spam, every action is paced by a configurable minimum interval.
-- It never touches anything while the player's cursor is holding an item.
-
-> On 1.21.11 the final locked ID is assigned by the server only when the result is taken, so the mod
-> **observes the real ID of each map it takes** to predict the next one. Locked IDs are consecutive,
-> so after observing the first one it can stop exactly at the target. (**Only the very first lock is
-> unpredictable** — start below the target.)
-
----
-
 ## Requirements
 
 | Item | Version |
