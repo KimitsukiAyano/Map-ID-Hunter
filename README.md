@@ -66,7 +66,7 @@ The mod works without ModMenu / YACL; settings are stored in `config/roundmaphun
 4. When the target ID is locked, the GUI stays open, a firework-blast sound plays, and a success
    message is logged.
 
-> When using AUTO, try a **small gap first** (2–3 below the target).
+> When using AUTO, try a **small gap first** (20–30 below the target).
 
 ---
 
