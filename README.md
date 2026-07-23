@@ -1,9 +1,9 @@
 # Round-Numbered Map ID Hunter
 
-A client-side Minecraft (Fabric) mod that **semi-automates locking maps at the cartography table**
+A client-side Minecraft (Fabric) mod that **automates locking maps at the cartography table**
 to help you obtain **round-numbered map IDs** such as `#777` or `#10000`.
 
-> Client-side only. Nothing is installed on the server.
+> Client-side only.
 
 ---
 
