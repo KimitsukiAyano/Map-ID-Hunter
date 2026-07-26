@@ -84,8 +84,9 @@ public final class AutoLoopController {
 
 	private final Set<Integer> skippedMapIds = new HashSet<>();
 	private final Set<Integer> emptyBeforeTake = new HashSet<>();
+	private final Set<Integer> producedLockedIds = new HashSet<>(); // junk (<T) maps we may drop to free space
 
-	private int batchRemaining;     // crafts left to do this batch
+	private int batchRemaining;     // crafts left to do this batch (upper bound = m_max)
 	private int assumedTakeId;      // fast-mode: id we assume the current take produced
 	private int discardAttempts;    // guard against an endless discard loop
 
@@ -126,6 +127,7 @@ public final class AutoLoopController {
 		knownNext = -1;
 		skippedMapIds.clear();
 		emptyBeforeTake.clear();
+		producedLockedIds.clear();
 		batchRemaining = 0;
 		chat("§d[RoundMapHunter] AUTO started (target #" + targetT + "). First lock cannot be predicted; "
 				+ "start below the target.");
@@ -234,7 +236,13 @@ public final class AutoLoopController {
 					}
 					int dest = findEmptySlot(h);
 					if (dest < 0) {
-						stop("§6[RoundMapHunter] inventory full — AUTO stopping.", true, player);
+						int junk = findProducedLockedSlot(h);
+						if (junk >= 0) {
+							im.clickSlot(h.syncId, junk, 1, SlotActionType.THROW, player);
+							gap(config);
+							return;
+						}
+						stop("§6[RoundMapHunter] inventory full and nothing to discard — AUTO stopping.", true, player);
 						return;
 					}
 					quickMove(im, h, CartographyTableScreenHandler.MAP_SLOT_INDEX, player);
@@ -254,7 +262,14 @@ public final class AutoLoopController {
 					return;
 				}
 				if (findEmptySlot(h) < 0) {
-					stop("§6[RoundMapHunter] inventory full — AUTO stopping.", true, player);
+					// Make room by dropping one junk (<T) locked map instead of stopping.
+					int junk = findProducedLockedSlot(h);
+					if (junk >= 0) {
+						im.clickSlot(h.syncId, junk, 1, SlotActionType.THROW, player);
+						gap(config);
+						return; // re-evaluate once the slot frees up
+					}
+					stop("§6[RoundMapHunter] inventory full and nothing to discard — AUTO stopping.", true, player);
 					return;
 				}
 				boolean verify = !config.fastMode || !hasKnownNext
@@ -269,6 +284,7 @@ public final class AutoLoopController {
 				} else {
 					// Fast mode: trust the deterministic id, don't wait to read it.
 					if (hasKnownNext) {
+						producedLockedIds.add(assumedTakeId); // droppable junk (<T)
 						knownNext++;
 					}
 					phase = Phase.LOCK_ENSURE_MAP;
@@ -356,7 +372,8 @@ public final class AutoLoopController {
 								true, player);
 						return;
 					}
-					int cap = Math.min(countEmptyMaps(client), countFreeSlots(h));
+					int createCap = Math.max(0, countFreeSlots(h) - 1); // always keep one working slot free
+					int cap = Math.min(countEmptyMaps(client), createCap);
 					m = Math.min(d, cap); // m <= m_max = D keeps us from overshooting
 				}
 				if (m <= 0) {
@@ -391,30 +408,28 @@ public final class AutoLoopController {
 				cooldown = Math.max(config.minActionIntervalTicks, 1);
 			}
 			case CRAFT -> {
-				if (batchRemaining <= 0) {
+				// Recount free slots every craft and keep one working slot free (createCap); never rely on
+				// a fixed count. batchRemaining still caps us at m_max so we cannot overshoot. On any stop
+				// condition, go lock whatever we made — do NOT terminate here.
+				int createCap = Math.max(0, countFreeSlotsInventory(player) - 1);
+				if (batchRemaining <= 0 || createCap <= 0) {
 					phase = Phase.REOPEN;
 					retryCount = 0;
 					return;
 				}
 				ItemStack held = player.getInventory().getSelectedStack();
 				if (!held.isOf(Items.MAP)) {
-					int hotbar = findEmptyMapHotbarSlot(player);
-					if (hotbar < 0) {
-						batchRemaining = 0; // ran out mid-batch; lock what we made
-						phase = Phase.REOPEN;
+					if (findEmptyMapHotbarSlot(player) < 0) {
+						phase = Phase.REOPEN; // out of empty maps — lock what we made
+						retryCount = 0;
 						return;
 					}
 					phase = Phase.SELECT_HOTBAR;
 					return;
 				}
-				if (player.getInventory().getEmptySlot() < 0) {
-					batchRemaining = 0; // no room for the completed map
-					phase = Phase.REOPEN;
-					return;
-				}
 				MinecraftClientAccessor acc = (MinecraftClientAccessor) client;
 				if (acc.roundmaphunter$getItemUseCooldown() > 0) {
-					return; // respect the vanilla item-use cooldown; one use per cooldown, never shortened
+					return; // respect the vanilla item-use cooldown; never shortened
 				}
 				im.interactItem(player, Hand.MAIN_HAND); // fill one empty map (sneak-use packet, no GUI)
 				acc.roundmaphunter$setItemUseCooldown(RmhConstants.VANILLA_ITEM_USE_COOLDOWN_TICKS);
@@ -466,6 +481,7 @@ public final class AutoLoopController {
 					+ " (first lock could not be predicted) — AUTO stopping.", true, player);
 			return;
 		}
+		producedLockedIds.add(lockedId); // droppable junk (<T)
 		RoundMapHunterConfig config = RoundMapHunterConfig.get();
 		gap(config);
 		phase = Phase.LOCK_ENSURE_MAP;
@@ -608,6 +624,29 @@ public final class AutoLoopController {
 		int n = 0;
 		for (Slot slot : h.slots) {
 			if (isPlayerSlot(slot, inv)) {
+				n++;
+			}
+		}
+		return n;
+	}
+
+	/** A player-inventory slot holding a junk (&lt;T) locked map we produced, safe to drop. */
+	private int findProducedLockedSlot(CartographyTableScreenHandler h) {
+		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
+		for (Slot slot : h.slots) {
+			ItemStack stack = slot.getStack();
+			if (isPlayerSlot(slot, inv) && stack.isOf(Items.FILLED_MAP)
+					&& producedLockedIds.contains(mapId(stack))) {
+				return slot.id;
+			}
+		}
+		return -1;
+	}
+
+	private int countFreeSlotsInventory(ClientPlayerEntity player) {
+		int n = 0;
+		for (ItemStack stack : player.getInventory().getMainStacks()) {
+			if (stack.isEmpty()) {
 				n++;
 			}
 		}
