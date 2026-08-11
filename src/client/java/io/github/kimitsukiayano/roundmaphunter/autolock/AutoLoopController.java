@@ -81,6 +81,7 @@ public final class AutoLoopController {
 	private int targetT;
 	private boolean hasKnownNext;
 	private int knownNext;          // id the next lock will produce (== world counter), once known
+	private boolean mustVerifyNextLock; // force verification (re-anchor knownNext) on the next take
 
 	private final Set<Integer> skippedMapIds = new HashSet<>();
 	private final Set<Integer> emptyBeforeTake = new HashSet<>();
@@ -125,6 +126,7 @@ public final class AutoLoopController {
 		targetT = config.targetId;
 		hasKnownNext = false;
 		knownNext = -1;
+		mustVerifyNextLock = true; // verify the very first lock (learn N)
 		skippedMapIds.clear();
 		emptyBeforeTake.clear();
 		producedLockedIds.clear();
@@ -229,20 +231,22 @@ public final class AutoLoopController {
 					return;
 				}
 				if (++waitTicks > config.containerWaitTimeoutTicks) {
-					// No preview: skip this map (probably already locked).
+					// No preview: skip this map (probably already locked). With the input filter fixed this
+					// should be rare — a run of these in the log means locked maps are still slipping in.
 					int id = mapId(mapSlot(h));
 					if (id >= 0) {
 						skippedMapIds.add(id);
 					}
+					RoundMapHunterClient.LOGGER.info("[autoloop] no preview for map #{} — skipping (already locked?)", id);
 					int dest = findEmptySlot(h);
 					if (dest < 0) {
-						int junk = findProducedLockedSlot(h);
+						int junk = findDroppableFilledMapSlot(client, h);
 						if (junk >= 0) {
 							im.clickSlot(h.syncId, junk, 1, SlotActionType.THROW, player);
 							gap(config);
 							return;
 						}
-						stop("§6[RoundMapHunter] inventory full and nothing to discard — AUTO stopping.", true, player);
+						stop("§6[RoundMapHunter] inventory full and no map to discard — AUTO stopping.", true, player);
 						return;
 					}
 					quickMove(im, h, CartographyTableScreenHandler.MAP_SLOT_INDEX, player);
@@ -262,17 +266,18 @@ public final class AutoLoopController {
 					return;
 				}
 				if (findEmptySlot(h) < 0) {
-					// Make room by dropping one junk (<T) locked map instead of stopping.
-					int junk = findProducedLockedSlot(h);
+					// Make room by dropping one map (locked first, else an unlocked completed map) instead
+					// of stopping. Only abort if there is no filled map at all to drop.
+					int junk = findDroppableFilledMapSlot(client, h);
 					if (junk >= 0) {
 						im.clickSlot(h.syncId, junk, 1, SlotActionType.THROW, player);
 						gap(config);
 						return; // re-evaluate once the slot frees up
 					}
-					stop("§6[RoundMapHunter] inventory full and nothing to discard — AUTO stopping.", true, player);
+					stop("§6[RoundMapHunter] inventory full and no map to discard — AUTO stopping.", true, player);
 					return;
 				}
-				boolean verify = !config.fastMode || !hasKnownNext
+				boolean verify = mustVerifyNextLock || !config.fastMode || !hasKnownNext
 						|| (targetT - knownNext) <= config.verifyThreshold;
 				collectEmptySlots(h, emptyBeforeTake);
 				assumedTakeId = knownNext;
@@ -446,6 +451,7 @@ public final class AutoLoopController {
 				}
 				if (handler(client) != null) {
 					retryCount = 0;
+					mustVerifyNextLock = true; // re-anchor knownNext to the true counter after crafting
 					phase = Phase.LOCK_ENSURE_MAP; // reopened successfully
 					return;
 				}
@@ -468,8 +474,10 @@ public final class AutoLoopController {
 	// -------------------------------------------------------------------------------------------
 
 	private void onLocked(ClientPlayerEntity player, int lockedId) {
-		knownNext = lockedId + 1;
+		// Decisions are made on the ACTUAL locked output id read from the result, never on prediction.
+		knownNext = lockedId + 1; // re-anchor to the true counter
 		hasKnownNext = true;
+		mustVerifyNextLock = false;
 		if (lockedId == targetT) {
 			player.playSound(SoundEvents.ENTITY_FIREWORK_ROCKET_BLAST, 1.0f, 1.0f);
 			chat("§a[RoundMapHunter] success! locked map #" + lockedId + " (target reached).");
@@ -554,15 +562,28 @@ public final class AutoLoopController {
 			if (!stack.isOf(Items.FILLED_MAP) || !stack.contains(DataComponentTypes.MAP_ID)) {
 				continue;
 			}
-			if (skippedMapIds.contains(mapId(stack))) {
+			int id = mapId(stack);
+			if (skippedMapIds.contains(id)) {
 				continue;
 			}
-			MapState ms = client.world == null ? null : FilledMapItem.getMapState(stack, client.world);
-			if (ms == null || !ms.locked) {
-				return slot.id;
+			// Never feed a locked map into the input slot: it can't be re-locked and just wastes a round
+			// trip. Exclude maps we locked ourselves (covers the window before MapState syncs) and any
+			// map the client confirms is locked.
+			if (producedLockedIds.contains(id) || isLocked(client, stack)) {
+				continue;
 			}
+			return slot.id;
 		}
 		return -1;
+	}
+
+	/** True only when the client can confirm the map is locked (MapState synced and locked). */
+	private boolean isLocked(MinecraftClient client, ItemStack stack) {
+		if (client.world == null) {
+			return false;
+		}
+		MapState ms = FilledMapItem.getMapState(stack, client.world);
+		return ms != null && ms.locked;
 	}
 
 	private int findGlass(CartographyTableScreenHandler h) {
@@ -630,17 +651,29 @@ public final class AutoLoopController {
 		return n;
 	}
 
-	/** A player-inventory slot holding a junk (&lt;T) locked map we produced, safe to drop. */
-	private int findProducedLockedSlot(CartographyTableScreenHandler h) {
-		PlayerInventory inv = MinecraftClient.getInstance().player.getInventory();
+	/**
+	 * A filled map we may drop to free a slot, by priority: (1) a locked map, else (2) an unlocked
+	 * completed map. Empty maps and glass panes are never returned.
+	 */
+	private int findDroppableFilledMapSlot(MinecraftClient client, CartographyTableScreenHandler h) {
+		PlayerInventory inv = client.player.getInventory();
+		int unlockedFallback = -1;
 		for (Slot slot : h.slots) {
+			if (!isPlayerSlot(slot, inv)) {
+				continue;
+			}
 			ItemStack stack = slot.getStack();
-			if (isPlayerSlot(slot, inv) && stack.isOf(Items.FILLED_MAP)
-					&& producedLockedIds.contains(mapId(stack))) {
-				return slot.id;
+			if (!stack.isOf(Items.FILLED_MAP)) {
+				continue;
+			}
+			if (producedLockedIds.contains(mapId(stack)) || isLocked(client, stack)) {
+				return slot.id; // priority 1: a locked map
+			}
+			if (unlockedFallback < 0) {
+				unlockedFallback = slot.id; // priority 2: an unlocked completed map
 			}
 		}
-		return -1;
+		return unlockedFallback;
 	}
 
 	private int countFreeSlotsInventory(ClientPlayerEntity player) {
